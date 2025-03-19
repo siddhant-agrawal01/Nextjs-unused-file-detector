@@ -4,31 +4,34 @@ import { program } from "commander";
 import inquirer, { DistinctQuestion } from "inquirer";
 import path from "path";
 import fs from "fs/promises";
-import { globby } from "globby"; // Named export from globby
+import { globby } from "globby";
 import { parse } from "@babel/parser";
-import traverse from "@babel/traverse"; // Default import
-import resolve from "resolve"; // Named export for ESM compatibility
-import type { Node, ImportDeclaration, CallExpression } from "@babel/types"; // Import Babel types
+import traverse from "@babel/traverse";
+import resolve from "resolve";
+import { createMatchPath } from "tsconfig-paths";
+import type { Node, ImportDeclaration, CallExpression, ExportNamedDeclaration, ExportAllDeclaration } from "@babel/types";
 
 /**
  * Collects all JavaScript and TypeScript files in the project, excluding build artifacts.
- * Scans the entire project to ensure utility files outside `app/` or `pages/` are included.
  * @param projectPath - The root directory of the Next.js project.
  * @returns An array of absolute file paths.
  */
 async function getAllFiles(projectPath: string): Promise<string[]> {
-  const files = await globby(["**/*.{js,jsx,ts,tsx}"], {
-    cwd: projectPath,
-    ignore: ["node_modules", ".next", "build"], // Exclude build directories
-    absolute: true,
-  });
+  const files = await globby(
+    ["**/*.{js,jsx,ts,tsx,JS,JSX,TS,TSX}"],
+    {
+      cwd: projectPath,
+      ignore: ["node_modules", ".next", "build"],
+      absolute: true,
+      caseSensitiveMatch: false,
+      dot: true,
+    }
+  );
   return files;
 }
 
 /**
  * Identifies entry points in a Next.js project based on the specified router type and directory.
- * - App Router: Includes `page.*`, `route.*`, and `layout.*` files, excluding private folders.
- * - Pages Router: Includes all `.js`, `.jsx`, `.ts`, `.tsx` files in the `pages` directory.
  * @param projectPath - The root directory of the Next.js project.
  * @param routerDir - The directory containing the router files (e.g., `app` or `pages`).
  * @param routerType - The type of router ("app" or "pages").
@@ -42,25 +45,25 @@ async function getEntryPoints(
   let entryPoints: string[] = [];
 
   if (routerType === "app") {
-    console.log("Scanning for App Router entry points...");
     const appEntryPoints = await globby(
       [
-        `${routerDir}/**/page.{js,jsx,ts,tsx}`,   // Page files defining routes
-        `${routerDir}/**/route.{js,ts}`,          // Route handlers for API endpoints
-        `${routerDir}/**/layout.{js,jsx,ts,tsx}`, // Layout files used by the framework
+        `${routerDir}/**/page.{js,jsx,ts,tsx}`,
+        `${routerDir}/**/route.{js,ts}`,
+        `${routerDir}/**/layout.{js,jsx,ts,tsx}`,
       ],
       {
         cwd: projectPath,
-        ignore: [`${routerDir}/**/_*/**`], // Exclude private folders (e.g., `_components`)
+        ignore: [`${routerDir}/**/_*/**`],
         absolute: true,
+        caseSensitiveMatch: false,
       }
     );
     entryPoints = entryPoints.concat(appEntryPoints);
   } else if (routerType === "pages") {
-    console.log("Scanning for Pages Router entry points...");
     const pagesEntryPoints = await globby([`${routerDir}/**/*.{js,jsx,ts,tsx}`], {
       cwd: projectPath,
       absolute: true,
+      caseSensitiveMatch: false,
     });
     entryPoints = entryPoints.concat(pagesEntryPoints);
   }
@@ -77,16 +80,17 @@ async function getEntryPoints(
 
 /**
  * Extracts imported file paths from a given file by parsing its AST.
- * Handles both `import` statements and `require` calls.
+ * Handles `import` statements, `require` calls, `export ... from`, and dynamic imports.
  * @param filePath - The absolute path to the file.
  * @param projectDir - The root directory of the project.
+ * @param configFile - The configuration file to use for path alias resolution ("tsconfig.json" or "jsconfig.json").
  * @returns An array of absolute paths to imported files within the project.
  */
-async function getImportedFiles(filePath: string, projectDir: string): Promise<string[]> {
+async function getImportedFiles(filePath: string, projectDir: string, configFile: string): Promise<string[]> {
   const code = await fs.readFile(filePath, "utf-8");
   const ast = parse(code, {
     sourceType: "module",
-    plugins: ["typescript", "jsx"], // Support TypeScript and JSX syntax
+    plugins: ["typescript", "jsx"],
   });
 
   const importedModules: string[] = [];
@@ -94,7 +98,16 @@ async function getImportedFiles(filePath: string, projectDir: string): Promise<s
     ImportDeclaration({ node }: { node: ImportDeclaration }) {
       importedModules.push(node.source.value);
     },
+    ExportNamedDeclaration({ node }: { node: ExportNamedDeclaration }) {
+      if (node.source) {
+        importedModules.push(node.source.value);
+      }
+    },
+    ExportAllDeclaration({ node }: { node: ExportAllDeclaration }) {
+      importedModules.push(node.source.value);
+    },
     CallExpression({ node }: { node: CallExpression }) {
+      // Handle `require` calls
       if (
         node.callee.type === "Identifier" &&
         node.callee.name === "require" &&
@@ -103,21 +116,47 @@ async function getImportedFiles(filePath: string, projectDir: string): Promise<s
       ) {
         importedModules.push((node.arguments[0] as { value: string }).value);
       }
+      // Handle dynamic imports (e.g., `import('...')`)
+      if (
+        node.callee.type === "Import" &&
+        node.arguments.length === 1 &&
+        node.arguments[0].type === "StringLiteral"
+      ) {
+        importedModules.push((node.arguments[0] as { value: string }).value);
+      }
     },
   });
+
+  // Load tsconfig.json or jsconfig.json for path alias resolution
+  let matchPath: ReturnType<typeof createMatchPath> | undefined;
+  try {
+    const configPath = path.join(projectDir, configFile);
+    const config = JSON.parse(await fs.readFile(configPath, "utf-8"));
+    const baseUrl = config.compilerOptions?.baseUrl || ".";
+    const paths = config.compilerOptions?.paths || {};
+    matchPath = createMatchPath(path.resolve(projectDir, baseUrl), paths);
+  } catch (err) {
+    // Silently fail; we'll fall back to standard resolution
+  }
 
   const importedFiles: string[] = [];
   for (const module of importedModules) {
     try {
-      const resolvedPath = resolve.sync(module, {
-        basedir: path.dirname(filePath),
-        extensions: [".js", ".jsx", ".ts", ".tsx"],
-      });
-      if (resolvedPath.startsWith(projectDir)) {
+      let resolvedPath: string | undefined;
+      if (matchPath && module.startsWith("@/")) {
+        resolvedPath = matchPath(module, undefined, undefined, [".js", ".jsx", ".ts", ".tsx"]);
+      }
+      if (!resolvedPath) {
+        resolvedPath = resolve.sync(module, {
+          basedir: path.dirname(filePath),
+          extensions: [".js", ".jsx", ".ts", ".tsx"],
+        });
+      }
+      if (resolvedPath && resolvedPath.startsWith(projectDir)) {
         importedFiles.push(resolvedPath);
       }
     } catch (err) {
-      console.warn(`Could not resolve ${module} from ${filePath}`);
+      // Silently fail; skip unresolvable imports
     }
   }
   return importedFiles;
@@ -127,15 +166,17 @@ async function getImportedFiles(filePath: string, projectDir: string): Promise<s
  * Builds a dependency graph mapping each file to its imported files.
  * @param allFiles - Array of all file paths in the project.
  * @param projectDir - The root directory of the project.
+ * @param configFile - The configuration file to use for path alias resolution.
  * @returns A Map where keys are file paths and values are arrays of imported file paths.
  */
 async function buildDependencyGraph(
   allFiles: string[],
-  projectDir: string
+  projectDir: string,
+  configFile: string
 ): Promise<Map<string, string[]>> {
   const graph = new Map<string, string[]>();
   for (const file of allFiles) {
-    const imports = await getImportedFiles(file, projectDir);
+    const imports = await getImportedFiles(file, projectDir, configFile);
     graph.set(file, imports);
   }
   return graph;
@@ -218,11 +259,18 @@ async function main() {
       message: "Is your code inside an `src/` directory?",
       default: false,
     },
+    {
+      type: "list",
+      name: "configType",
+      message: "Does your project use TypeScript (tsconfig.json) or JavaScript (jsconfig.json)?",
+      choices: ["TypeScript (tsconfig.json)", "JavaScript (jsconfig.json)"],
+    },
   ];
 
   const answers = await inquirer.prompt(questions);
   const routerType = answers.routerType === "App Router" ? "app" : "pages";
   const useSrc = answers.useSrc;
+  const configFile = answers.configType === "TypeScript (tsconfig.json)" ? "tsconfig.json" : "jsconfig.json";
 
   // Determine the router directory based on user input
   const routerDir = useSrc
@@ -239,13 +287,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Scanning project at ${projectPath}...`);
   const allFiles = await getAllFiles(projectPath);
-  console.log(`Found ${allFiles.length} files.`);
-
   const entryPoints = await getEntryPoints(projectPath, routerDir, routerType);
-  console.log(`Building dependency graph from ${entryPoints.length} entry points...`);
-  const graph = await buildDependencyGraph(allFiles, projectPath);
+  const graph = await buildDependencyGraph(allFiles, projectPath, configFile);
   const reachable = getReachableFiles(entryPoints, graph);
   const unusedFiles = getUnusedFiles(allFiles, reachable);
 
@@ -254,8 +298,10 @@ async function main() {
     return;
   }
 
-  console.log(`\nDetected ${unusedFiles.length} unused files:`);
-  unusedFiles.forEach((file) => console.log(`- ${file}`));
+  // Log the count of unused files
+  console.log(`Found ${unusedFiles.length} unused files.`);
+  // List the unused files
+  unusedFiles.forEach((file) => console.log(file));
 
   if (options.delete) {
     const deleteQuestions: DistinctQuestion[] = [
@@ -271,7 +317,6 @@ async function main() {
     if (confirm) {
       for (const file of unusedFiles) {
         await fs.unlink(file);
-        console.log(`Deleted ${file}`);
       }
       console.log("Deletion complete.");
     } else {
