@@ -1,8 +1,4 @@
-Let’s create a detailed `README.md` file for your `unused-file-detector` tool, written in the style of a senior developer. The README will include a clear introduction, installation instructions, usage guide with step-by-step examples for all scenarios (App Router, Pages Router, with/without `src/`, TypeScript/JavaScript), and additional notes for troubleshooting and contributing. After that, I’ll provide the raw Markdown code that you can copy and paste into your `README.md` file.
-
----
-
-### README.md (Formatted for Preview)
+[![npm version](https://badge.fury.io/js/@siddhant%2Funused-file-detector.svg)](https://www.npmjs.com/package/@siddhant/unused-file-detector)
 
 # Unused File Detector for Next.js
 
