@@ -1,5 +1,5 @@
 {
-  "name": "unused-file-detector",
+  "name": "@cipher/nextjs-clean",
   "version": "1.0.0",
   "type": "module",
   "description": "CLI tool to detect and optionally delete unused files in a Next.js project",
@@ -12,6 +12,25 @@
     "start": "node dist/cli.js",
     "prepublishOnly": "npm run build"
   },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/siddhant-agrawal01/Nextjs-unused-file-detector.git"
+  },
+  "keywords": [
+    "nextjs",
+    "unused-files",
+    "cleanup",
+    "javascript",
+    "typescript",
+    "cli"
+  ],
+  "author": "Siddhant <SiddhantAgrawal001@gmail.com>",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "dependencies": {
     "@babel/parser": "^7.26.10",
     "@babel/traverse": "^7.26.10",
@@ -31,17 +50,5 @@
   },
   "engines": {
     "node": ">=14.0.0"
-  },
-  "author": "Your Name",
-  "license": "MIT",
-  "keywords": [
-    "cli",
-    "nextjs",
-    "unused-files",
-    "cleanup"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yourusername/unused-file-detector.git"
   }
 }
