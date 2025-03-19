@@ -1,4 +1,4 @@
-
+[![npm version](https://badge.fury.io/js/@siddhant%2Funused-file-detector.svg)](https://www.npmjs.com/package/@siddhant/unused-file-detector)
 
 # Unused File Detector for Next.js
 
